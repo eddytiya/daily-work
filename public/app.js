@@ -3,7 +3,7 @@ const dateKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-$
 const today=dateKey(new Date());let selected=today,view=new Date(new Date().getFullYear(),new Date().getMonth(),1),entries=[];
 const pretty=(key,options)=>new Date(key+'T12:00:00').toLocaleDateString(undefined,options);
 let timer;function notify(message){$('status').textContent=message;$('status').style.display='block';clearTimeout(timer);timer=setTimeout(()=>$('status').style.display='none',5000)}
-async function api(path,options){const r=await fetch(path,options);const data=await r.json();if(!r.ok)throw Error(data.error||'Could not complete the request');return data}
+async function api(path,options){return WorkStorage.api(path,options)}
 function el(tag,text,className){const n=document.createElement(tag);n.textContent=text;if(className)n.className=className;return n}
 function reset(){ $('form').reset();$('entryId').value='';$('date').value=selected;$('formTitle').textContent='Add a work entry';$('save').textContent='Save entry';$('cancel').hidden=true }
 function selectDay(key){selected=key;reset();render()}
@@ -16,10 +16,38 @@ function render(){
  if(!items.length){const empty=el('div','','empty');empty.append(el('strong','A fresh page for your day.'),el('span','Add what you worked on. Even the small things count.'));$('entries').append(empty)}
  for(const entry of items){const box=el('article','','entry'),top=el('div','','entry-top');top.append(el('span',entry.category),el('span',entry.hours?`${entry.hours} hours`:''));box.append(top,el('h3',entry.title));if(entry.notes)box.append(el('p',entry.notes));const actions=el('div','','entry-actions'),edit=el('button','Edit'),del=el('button','Delete','delete');edit.onclick=()=>{ $('entryId').value=entry.id;for(const k of ['date','title','notes','category','hours'])$(k).value=entry[k];$('formTitle').textContent='Edit work entry';$('save').textContent='Save changes';$('cancel').hidden=false;$('title').focus() };del.onclick=async()=>{if(!confirm('Delete this work entry?'))return;try{await api('/api/entries/'+entry.id,{method:'DELETE'});await load();if($('entryId').value===String(entry.id))reset();notify('Entry deleted')}catch(e){notify(e.message)}};actions.append(edit,del);box.append(actions);$('entries').append(box)} search();
 }
-async function load(){entries=await api('/api/entries');render()}
+let loadVersion=0;
+async function load(){
+ const version=++loadVersion;
+ try {const fresh=await api('/api/entries');if(version!==loadVersion||!WorkStorage.signedIn())return;entries=fresh;$('loadError').hidden=true;render()}
+ catch(error){if(version===loadVersion){$('loadError').textContent=error.message;$('loadError').hidden=false}throw error}
+}
 function search(){const q=$('search').value.trim().toLowerCase();$('results').replaceChildren();if(!q)return;const found=entries.filter(e=>(e.title+' '+e.notes+' '+e.category).toLowerCase().includes(q));if(!found.length)$('results').append(el('p','No matching entries.','empty'));for(const entry of found){const b=el('button',entry.title,'search-result');b.append(el('small',pretty(entry.date,{dateStyle:'medium'})));b.onclick=()=>{view=new Date(entry.date+'T12:00:00');view.setDate(1);selectDay(entry.date)};$('results').append(b)}}
 $('search').oninput=search;$('prev').onclick=()=>{view.setMonth(view.getMonth()-1);render()};$('next').onclick=()=>{view.setMonth(view.getMonth()+1);render()};
 function goToday(){view=new Date(today+'T12:00:00');view.setDate(1);selectDay(today)}$('today').onclick=goToday;$('new').onclick=()=>{goToday();$('title').focus()};$('cancel').onclick=reset;
-$('form').onsubmit=async event=>{event.preventDefault();const data={};for(const k of ['date','title','notes','category','hours'])data[k]=$(k).value;data.hours=Number(data.hours||0);if($('entryId').value)data.id=Number($('entryId').value);$('save').disabled=true;try{await api('/api/entries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});selected=data.date;view=new Date(selected+'T12:00:00');view.setDate(1);reset();await load();notify('Entry saved on this computer')}catch(e){notify('Could not save: '+e.message)}finally{$('save').disabled=false}};
+$('form').onsubmit=async event=>{event.preventDefault();const data={};for(const k of ['date','title','notes','category','hours'])data[k]=$(k).value;data.hours=Number(data.hours||0);if($('entryId').value)data.id=WorkStorage.local?Number($('entryId').value):$('entryId').value;$('save').disabled=true;try{await api('/api/entries',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});selected=data.date;view=new Date(selected+'T12:00:00');view.setDate(1);reset();await load();notify(WorkStorage.local?'Entry saved on this computer':'Entry saved to your account')}catch(e){notify('Could not save: '+e.message)}finally{$('save').disabled=false}};
 $('export').onclick=async()=>{try{const fresh=await api('/api/entries'),url=URL.createObjectURL(new Blob([JSON.stringify({version:1,exported:new Date().toISOString(),entries:fresh},null,2)],{type:'application/json'}));const a=el('a','');a.href=url;a.download=`daily-work-${today}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)}catch(e){notify('Could not export: '+e.message)}};
-reset();render();load().catch(()=>notify('Cannot load entries. Check that the local server is running, then refresh.'));
+function showAccount(){
+ const ready=WorkStorage.signedIn();
+ $('authPanel').hidden=ready;$('workApp').hidden=!ready;$('export').hidden=!ready;
+ $('signout').hidden=WorkStorage.local||!ready;
+ document.querySelector('.local').textContent=WorkStorage.local?'Saved on this computer':ready?WorkStorage.email():'Private cloud journal';
+ document.querySelector('footer span').textContent=WorkStorage.local?'Local storage · SQLite database':'Your account · Supabase storage';
+ if(ready)load().catch(error=>notify(error.message));
+}
+window.addEventListener('work-signed-out',()=>{loadVersion++;entries=[];reset();render();showAccount()});
+$('signout').onclick=async()=>{ $('signout').disabled=true;try{await WorkStorage.signOut()}finally{$('signout').disabled=false} };
+async function authenticate(create){
+ if(!$('authForm').reportValidity())return;
+ $('signin').disabled=true;$('signup').disabled=true;$('authMessage').textContent=create?'Creating your account…':'Signing in…';
+ try{
+ const email=$('email').value.trim(),password=$('password').value;
+ if(create){const active=await WorkStorage.signUp(email,password);if(!active){$('authMessage').textContent='Check your email to confirm your account, then return here and sign in.';$('password').value='';return}}
+ else await WorkStorage.signIn(email,password);
+ $('authMessage').textContent='';$('password').value='';showAccount();
+ }catch(error){$('authMessage').textContent=error.message}
+ finally{$('signin').disabled=false;$('signup').disabled=false}
+}
+$('authForm').onsubmit=event=>{event.preventDefault();authenticate(false)};
+$('signup').onclick=()=>authenticate(true);
+reset();render();showAccount();

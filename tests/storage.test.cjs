@@ -1,0 +1,23 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const fs = require('node:fs');
+function app({local=false,session=null,responses=[]}={}) {
+ const calls=[],events=[],saved=new Map();if(session)saved.set('daily-work-session',JSON.stringify(session));
+ const context={URLSearchParams,Event,Date,console,location:{hostname:local?'127.0.0.1':'daily-work.vercel.app',search:'',origin:'https://daily-work.vercel.app'},sessionStorage:{getItem:k=>saved.get(k),setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)},fetch:async(url,options={})=>{calls.push({url,options});const next=responses.shift();if(!next)throw Error('Unexpected request');return {ok:next.status?next.status<400:true,status:next.status||200,text:async()=>JSON.stringify(next.data),json:async()=>next.data}}};
+ context.window={DAILY_WORK_CONFIG:{supabaseUrl:'https://example.supabase.co',publishableKey:'sb_publishable_test'},dispatchEvent:event=>events.push(event.type)};
+ vm.runInNewContext(fs.readFileSync('public/storage.js','utf8').replace(/^\uFEFF/,''),context);
+ return {storage:context.window.WorkStorage,calls,events,saved};
+}
+const session={access_token:'user-token',refresh_token:'refresh-token',expires_at:Date.now()+3600000,user:{email:'test@example.com'}};
+test('local mode keeps SQLite API and does not contact Supabase',async()=>{const a=app({local:true,responses:[{data:[]}]});await a.storage.api('/api/entries');assert.equal(a.calls[0].url,'/api/entries');assert.equal(a.storage.signedIn(),true)});
+test('signed-out cloud requests are blocked before network access',async()=>{const a=app();await assert.rejects(a.storage.api('/api/entries'),/Sign in/);assert.equal(a.calls.length,0)});
+test('login stores session and uses publishable key as apikey, not bearer token',async()=>{const a=app({responses:[{data:{...session,expires_in:3600}}]});await a.storage.signIn('test@example.com','example-password');assert.equal(a.storage.signedIn(),true);assert.equal(a.calls[0].options.headers.apikey,'sb_publishable_test');assert.equal(a.calls[0].options.headers.Authorization,undefined)});
+test('cloud reads every page with the signed-in user token',async()=>{const a=app({session,responses:[{data:Array.from({length:500},(_,i)=>({id:i}))},{data:[{id:500}]}]});const rows=await a.storage.api('/api/entries');assert.equal(rows.length,501);assert.match(a.calls[1].url,/offset=500/);assert.equal(a.calls[0].options.headers.Authorization,'Bearer user-token')});
+test('edit preserves UUID and cannot set ownership from submitted data',async()=>{const a=app({session,responses:[{data:[{id:'entry-uuid'}]}]});await a.storage.api('/api/entries',{method:'POST',body:JSON.stringify({id:'entry-uuid',date:'2026-11-02',title:' Test ',notes:' Note ',category:'Work',hours:2,user_id:'someone-else'})});assert.equal(a.calls[0].options.method,'PATCH');assert.match(a.calls[0].url,/id=eq.entry-uuid/);const body=JSON.parse(a.calls[0].options.body);assert.equal(body.user_id,undefined);assert.equal(body.title,'Test')});
+test('delete reports missing entry instead of false success',async()=>{const a=app({session,responses:[{data:[]}]});await assert.rejects(a.storage.api('/api/entries/uuid',{method:'DELETE'}),/no longer exists/)});
+test('expired sessions refresh before accessing records',async()=>{const a=app({session:{...session,expires_at:0},responses:[{data:{...session,access_token:'renewed',expires_in:3600}},{data:[]}]});await a.storage.api('/api/entries');assert.match(a.calls[0].url,/grant_type=refresh_token/);assert.equal(a.calls[1].options.headers.Authorization,'Bearer renewed')});
+test('invalid refresh clears credentials and signals signed-out UI',async()=>{const a=app({session:{...session,expires_at:0},responses:[{status:400,data:{msg:'Invalid refresh token'}}]});await assert.rejects(a.storage.api('/api/entries'));assert.equal(a.storage.signedIn(),false);assert.ok(a.events.includes('work-signed-out'));assert.equal(a.saved.size,0)});
+test('missing schema produces actionable setup error',async()=>{const a=app({session,responses:[{status:404,data:{code:'PGRST205'}}]});await assert.rejects(a.storage.api('/api/entries'),/schema.sql/)});
+test('sign-out clears local credentials even if network fails',async()=>{const a=app({session});await a.storage.signOut();assert.equal(a.storage.signedIn(),false);assert.equal(a.saved.size,0)});
+test('signup without a session requires email confirmation',async()=>{const a=app({responses:[{data:{user:{id:'new-user'}}}]});assert.equal(await a.storage.signUp('test@example.com','example-password'),false);assert.equal(a.storage.signedIn(),false)});
