@@ -1,0 +1,2 @@
+# Design
+Operate mode. Quiet paper-white workspace with forest-green actions and pale sage selection. Calendar occupies the main left column; a dated journal editor and entry list occupy the right. Segoe UI typography; 32px page title, 22px section titles, 14–16px body. Thin warm-gray rules, 12px surface corners, 8px control corners. Keyboard focus uses a green outline. Mobile stacks the editor below the calendar.
