@@ -73,7 +73,7 @@
         if (method === 'GET') {
           const all = []; let offset = 0;
           while (true) {
-            const rows = await request(`/rest/v1/entries?select=id,date,title,notes,category,hours,updated&order=date.desc,id.desc&limit=500&offset=${offset}`, {}, token);
+            const rows = await request(`/rest/v1/entries?select=id,date,title,notes,category,hours,updated,attachments&order=date.desc,id.desc&limit=500&offset=${offset}`, {}, token);
             all.push(...rows); if (rows.length < 500) break; offset += rows.length;
           }
           return all;
@@ -82,7 +82,7 @@
         if (method === 'DELETE') endpoint += '?id=eq.' + encodeURIComponent(path.split('/').pop());
         else {
           const input = JSON.parse(options.body);
-          body = {date: input.date, title: input.title.trim(), notes: input.notes.trim(), category: input.category, hours: input.hours};
+          body = {date: input.date, title: input.title.trim(), notes: input.notes.trim(), category: input.category, hours: input.hours, attachments: input.attachments || []};
           if (input.id) endpoint += '?id=eq.' + encodeURIComponent(input.id);
           options = {...options, method: input.id ? 'PATCH' : 'POST'};
         }
@@ -94,7 +94,7 @@
         return {ok: true};
       } catch (error) {
         if (error.status === 401) {saveSession(null); window.dispatchEvent(new Event('work-signed-out'));}
-        if (error.code === 'PGRST205' || error.code === '42P01') throw Error('The database needs setup. Run supabase/schema.sql in your Supabase SQL Editor, then reload.');
+        if (error.code === 'PGRST205' || error.code === '42P01' || error.code === 'PGRST204' || error.code === '42703') throw Error('The database needs setup. Run supabase/schema.sql in your Supabase SQL Editor, then reload.');
         throw error;
       }
     }

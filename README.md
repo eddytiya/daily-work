@@ -25,3 +25,8 @@ No environment variables or secret keys are needed by the static deployment. The
 ## Verify
 Run `node --test tests/storage.test.cjs`, `node --check public/app.js`, and `python -m py_compile server.py`.
 For cloud testing locally, visit http://127.0.0.1:8080/?cloud=1. Without that query parameter localhost continues to use SQLite.
+
+## Calendar file attachments
+Select a calendar day, fill in the entry title, and use **Attach files** before saving. Attach up to three files of 1 MB each. Download files from the saved entry; use Edit to remove or add attachments, then Save changes. File names are searchable. Deleting an entry also deletes its attachments.
+
+Local SQLite databases upgrade automatically on server startup. For an existing hosted installation, re-run `supabase/schema.sql` in the Supabase SQL Editor before using this feature, then deploy the updated public files. Attachments are stored inside each entry under the same owner-only access policies. JSON exports and SQLite backups include the file contents. This small-file approach increases entry and backup sizes; it is intended for documents and small images.
